@@ -24,7 +24,7 @@ near_ps::near_ps(QJsonObject set, int zi)
     }
     //    cout << Dir;
     /* load Phi data */
-    Phi = zeros<vec>(nimgs);
+    Phi = zeros<mat>(nimgs);
     JsonValur = set.value("Phi");
     JsonArray = JsonValur.toArray();
     for (int i=0;i<nimgs;i++)
@@ -49,17 +49,15 @@ near_ps::near_ps(QJsonObject set, int zi)
 
     nrows = 3;
     ncols = 3;
-    nchannels =1;
+    nchannels = 2;
+    Phi = repmat(Phi,1,nchannels);
 
     I = field<mat>(nimgs,nchannels);
-    I(0,0) = randu<mat>(nrows,ncols);
-    I(1,0) = randu<mat>(nrows,ncols);
-    I(2,0) = randu<mat>(nrows,ncols);
-    I(3,0) = randu<mat>(nrows,ncols);
-    I(4,0) = randu<mat>(nrows,ncols);
-    I(5,0) = randu<mat>(nrows,ncols);
-    I(6,0) = randu<mat>(nrows,ncols);
-    I(7,0) = randu<mat>(nrows,ncols);
+    for (int ch =0;ch<nchannels;ch++) {
+        for (int i=0;i<nimgs;i++) {
+            I(i,ch) = randu<mat>(nrows,ncols);
+        }
+    }
 
     z_0 = zi;
 }
@@ -115,7 +113,6 @@ void near_ps::init()
     uvec imask = find(mask>0);
     if (imask.n_elem<0)
         return;
-    npixel = imask.n_elem;
     umat iimask = ind2sub(size(mask),imask);
     int imin = iimask.row(0).min();
     int imax = iimask.row(0).max();
@@ -128,6 +125,7 @@ void near_ps::init()
     }
     mask = mask.submat(imin,jmin,size(imax-imin+1,jmax-jmin+1));
     imask = find(mask>0);
+    npixels = imask.n_elem;
     nrows = mask.n_rows;
     ncols = mask.n_cols;
 
@@ -137,34 +135,34 @@ void near_ps::init()
     sp_mat Dy_rep = repmat(Dy,nimgs,1);
 
     // Vectorize data
-    mat t=zeros(0,0);
-    for (int i=0;i<nimgs;i++) {
-        t = join_rows(I(i)(imask),t);
+    Iv = zeros<mat>(npixels,nimgs*nchannels);
+    for (int ch=0;ch<nchannels;ch++) {
+        for (int i=0;i<nimgs;i++) {
+            Iv.col(i+ch*nimgs) = I(i,ch)(imask);
+        }
     }
     I.clear();
-    I = field<mat>(nchannels);
-    I(0) = t;
-    t.clear();
 
-    // Sort images to remove shadows and higlights
-    field<umat> W_idx = field<umat>(nchannels);
+    /* Sort images to remove shadows and higlights */
+    mat W_idx = zeros<mat>(npixels,nimgs*nchannels);
     for (int ch=0;ch<nchannels;ch++) {
-        W_idx(ch) = zeros<umat>(imask.n_elem,nimgs);
+        mat It = Iv.submat(0,ch*nimgs,size(npixels,nimgs));
         for (uint i=0;i<imask.n_elem;i++) {
-            uvec id = sort_index(I(ch).row(i));
+            uvec id = sort_index(It.row(i));
             id = id + id*(imask.n_elem-1) + i;
             id = id(regspace<uvec>(2,6));
-            W_idx(ch)(id) = ones<uvec>(id.n_elem);
+            id = id+npixels*nimgs*ch;
+            W_idx(id) = ones<vec>(id.n_elem);
         }
     }
 
-    // Initialize variables
-    vec z_tilde(npixel);
+    /* Initialize variables */
+    vec z_tilde(npixels);
     cube rho(nrows,ncols,nchannels);
-    mat rho_tilde(npixel,nchannels);
+    mat rho_tilde(npixels,nchannels);
 
     z0 = zeros(nrows,ncols)*datum::nan;
-    z0(imask) = ones<vec>(npixel)*z_0;
+    z0(imask) = ones<vec>(npixels)*z_0;
     z_tilde = log(z0(imask));
     /// channels need to be set
     rho.slice(0) = ones<mat>(nrows,ncols)/max_I;
@@ -196,14 +194,70 @@ void near_ps::init()
     res.clear();
 
     mat psi = shading_fun(z_tilde,Tz,px_rep,py_rep,Dx_rep,Dy_rep);
-    psi.reshape(npixel,nimgs);
+    psi.reshape(npixels,nimgs);
 
-    for (int i=0;i<nchannels;i++) {
-//        energy =
+    energy = J_fun(rho_tilde,psi,Iv,W_idx);
+    energy = energy/(npixels*nimgs*nchannels);
 
-//        Ich = I(:,:,ch);
-//                Wch_idx = W_idx(:,:,ch);
-//                energy = energy+J_fcn(rho_tilde(:,ch),Wch_idx(:).*psi(:),Wch_idx(:).*Ich(:));
+    for (int i=0;i<maxit;i++) {
+        mat w = zeros<mat>(npixels,nimgs*nchannels);
+        mat chi = chi_fun(psi);
+        mat phi_chi = psi%chi;
+
+        mat rho_rep = zeros<mat>(npixels,nimgs*nchannels);
+        /* Pseudo-albedo update */
+        mat r = r_fun(rho_tilde,psi,Iv,W_idx);
+        mat phi_chich  = repmat(phi_chi,1,nchannels);
+        r.reshape(npixels,nimgs);
+        r = repmat(r,1,2);
+        w = W_idx%w_fun(r);
+        mat dn = sum(w%pow(phi_chich,2),1);
+        uvec idx = find(dn>0);
+        if (idx.n_elem>0) {
+            rho_tilde(idx) = sum(w.rows(idx)%Iv.rows(idx)%phi_chich.rows(idx),1)%(1/dn(idx));
+        }
+
+        //        for (int ch=0;ch<nchannels;ch++) {
+        //            mat Ich = Iv.slice(ch);
+        //            mat Wch = W_idx.slice(ch);
+        //            mat r = r_fun(rho_tilde.col(ch),psi,Ich,Wch);
+        //            r.reshape(npixels,nimgs);
+        //            w.slice(ch) = Wch%w_fun(r);
+        //            uvec c = regspace<uvec>(ch*nimgs,(ch+1)*nimgs-1);
+        //            rho_rep.cols(c) = rho_tilde.col(ch)*Phi.t();
+        //        }
+        //        mat D = reshape(w,npixels,nimgs*nchannels,1);
+        //        D = repmat(chi,1,nchannels)%(pow(rho_rep,2))%D;
+        //        sp_mat Ax(npixels*nimgs,npixels*nimgs);
+        //        sp_mat Ay(npixels*nimgs,npixels*nimgs);
+        //        Ax.diag() = reshape(fx*Tz.slice(0)-px_rep%Tz.slice(2),1,npixels*nimgs);
+        //        Ay.diag() = reshape(fy*Tz.slice(1)-py_rep%Tz.slice(2),1,npixels*nimgs);
+        //        sp_mat A = Ax*Dx_rep+Ay*Dy_rep;
+        //        sp_mat Axx(npixels*nimgs,npixels*nimgs);
+        //        sp_mat Ayy(npixels*nimgs,npixels*nimgs);
+        //        Axx.diag() = reshape(fx*grad_Tz.slice(0)-px_rep%grad_Tz.slice(2),1,npixels*nimgs);
+        //        Ayy.diag() = reshape(fy*grad_Tz.slice(1)-py_rep%grad_Tz.slice(2),1,npixels*nimgs);
+        //        umat id(2,npixels*nimgs);
+        //        id.row(0) = regspace<urowvec>(0,npixels*nimgs-1);
+        //        id.row(1) = id.row(0)-(id.row(0)/npixels)*npixels;
+        //        vec v = (Axx*Dx_rep+Ayy*Dy_rep)*z_tilde-reshape(grad_Tz.slice(2),npixels*nimgs,1);
+        //        A += sp_mat(id,v);
+        //        A = repmat(A,nchannels,1);
+        //        sp_mat M(nimgs*npixels*nchannels,nimgs*npixels*nchannels);
+        //        M.diag() = reshape(D,1,nimgs*npixels*nchannels);
+        //        M = A.t()*M*A;
+        //        M = M/(nimgs*npixels*nchannels);
+        //        mat aaa = rho_rep%repmat(psi,1,nchannels);
+        //        mat ddd = reshape(Iv,npixels,nimgs*nchannels,1);
+        //        aaa = aaa+ddd;
+        //        cout << aaa.n_rows << aaa.n_cols << endl;
+        //        cout << ddd.n_rows << ddd.n_cols << endl;
+        ////        mat rhs = repmat(chi,1,nchannels)%rho_rep%
+        ////                (rho_rep%repmat(psi,1,nchannels)+reshape(Iv,npixels,nimgs*nchannels,1));
+        ////                %reshape(w,npixels,nimgs*nchannels);
+        ////        rhs = A.t()*rhs/(nimgs*npixels*nchannels);
+        //        rho_rep.clear();
+
     }
 
     time = QDateTime::currentDateTime();
@@ -314,16 +368,16 @@ field<sp_mat> near_ps::make_gradient()
 }
 
 field<cube> near_ps::t_fun(vec z,vec u_tilde,vec v_tilde) {
-    int npixel = z.n_elem;
+    int npixels = z.n_elem;
 
     vec exp_z = exp(z);
     vec X = exp_z%u_tilde;
     vec Y = exp_z%v_tilde;
     vec Z = exp_z;
 
-    cube T_field(npixel,nimgs,3);
-    mat a_field(npixel,nimgs);
-    mat de_field(npixel,nimgs);
+    cube T_field(npixels,nimgs,3);
+    mat a_field(npixels,nimgs);
+    mat de_field(npixels,nimgs);
 
     for (int i=0;i<nimgs;i++) {
         T_field.slice(0).col(i) = S(i,0)-X;
@@ -338,10 +392,10 @@ field<cube> near_ps::t_fun(vec z,vec u_tilde,vec v_tilde) {
         T_field.slice(2).col(i) = T_field.slice(2).col(i)%a_field.col(i);
     }
 
-    cube grad_t(npixel,nimgs,3);
-    grad_t.slice(0) = repmat(-exp_z%u_tilde,1,nimgs)%(a_field+de_field)+repmat(S.col(0).t(),npixel,1)%de_field;
-    grad_t.slice(1) = repmat(-exp_z%v_tilde,1,nimgs)%(a_field+de_field)+repmat(S.col(1).t(),npixel,1)%de_field;
-    grad_t.slice(2) = repmat(-exp_z,1,nimgs)%(a_field+de_field)+repmat(S.col(2).t(),npixel,1)%de_field;
+    cube grad_t(npixels,nimgs,3);
+    grad_t.slice(0) = repmat(-exp_z%u_tilde,1,nimgs)%(a_field+de_field)+repmat(S.col(0).t(),npixels,1)%de_field;
+    grad_t.slice(1) = repmat(-exp_z%v_tilde,1,nimgs)%(a_field+de_field)+repmat(S.col(1).t(),npixels,1)%de_field;
+    grad_t.slice(2) = repmat(-exp_z,1,nimgs)%(a_field+de_field)+repmat(S.col(2).t(),npixels,1)%de_field;
 
     field<cube> res(2);
     res(0) = T_field;
@@ -350,32 +404,35 @@ field<cube> near_ps::t_fun(vec z,vec u_tilde,vec v_tilde) {
     return res;
 }
 
-mat near_ps::J_fun() {
-
-}
-
 mat near_ps::shading_fun(vec z, cube tz, mat px_rep, mat py_rep, sp_mat Dx_rep, sp_mat Dy_rep) {
-    vec tx = reshape(fx*tz.slice(0)-px_rep%tz.slice(2),npixel*nimgs,1);
-    vec ty = reshape(fy*tz.slice(1)-py_rep%tz.slice(2),npixel*nimgs,1);
+    vec tx = reshape(fx*tz.slice(0)-px_rep%tz.slice(2),npixels*nimgs,1);
+    vec ty = reshape(fy*tz.slice(1)-py_rep%tz.slice(2),npixels*nimgs,1);
 
-    umat location(2,npixel*nimgs);
-    location.row(0) = regspace<urowvec>(0,npixel*nimgs-1);
-    location.row(1) = regspace<urowvec>(0,npixel*nimgs-1);
+    umat location(2,npixels*nimgs);
+    location.row(0) = regspace<urowvec>(0,npixels*nimgs-1);
+    location.row(1) = regspace<urowvec>(0,npixels*nimgs-1);
     sp_mat stx(location,tx);
     sp_mat sty(location,ty);
     stx = stx*Dx_rep;
     sty = sty*Dy_rep;
 
-    mat r = (stx+sty)*z-reshape(tz.slice(2),npixel*nimgs,1);
+    mat r = (stx+sty)*z-reshape(tz.slice(2),npixels*nimgs,1);
     return r;
 }
 
 mat near_ps::r_fun(mat rho,mat shadz,mat II,mat W_idx) {
-    mat res = rho*Phi;
-    res.reshape(nimgs*npixel,1);
-    res = W_idx%(res%psi_fun(shadz)-II);
+    mat res = rho*Phi.t();
+    res.reshape(npixels,nimgs);
+    mat t = res%psi_fun(shadz);
+    res = W_idx%(repmat(t,1,nchannels)-II);
     return res;
-    //    res = res%psi_fun(shadz)-II;
+}
+
+double near_ps::J_fun(mat rho,mat shadz,mat II,mat W_idx) {
+    mat res = r_fun(rho,shadz,II,W_idx);
+    res = phi_fun(res);
+    double r = accu(res);
+    return r;
 }
 
 mat near_ps::psi_fun(mat x) {
@@ -394,7 +451,7 @@ mat near_ps::chi_fun(mat x) {
         return t;
     }
     else
-        return ones<mat>(x.size());
+        return ones<mat>(x.n_rows,x.n_cols);
 }
 
 mat near_ps::phi_fun(mat x) {
@@ -414,14 +471,15 @@ mat near_ps::phi_fun(mat x) {
         return 0.5*lambda*lambda*(1-exp(-x%x/(lambda*lambda)));
     case 5:
         return (1/6)*(abs(x)>=lambda)%(1-pow((1-x%x/(lambda*lambda)),3))*lambda*lambda+(abs(x)<lambda)*lambda*lambda;
+    default:
+        return zeros<mat>(1,1) ;
     }
-
 }
 
 mat near_ps::w_fun(mat x) {
     switch (estimator) {
     case 0:
-        return ones<mat>(x.size());
+        return ones<mat>(x.n_rows,x.n_cols);
     case 1:
         return 1/(lambda*lambda+pow(x,2));
     case 2:
@@ -437,7 +495,6 @@ mat near_ps::w_fun(mat x) {
     case 5:
         return (abs(x)<=lambda)*pow((1-x%x/(lambda*lambda)),2);
     default:
-        break;
+        return zeros<mat>(1,1);
     }
-
 }
