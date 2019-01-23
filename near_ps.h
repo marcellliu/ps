@@ -1,27 +1,7 @@
 #ifndef NEAR_PS_H
 #define NEAR_PS_H
 
-#include <iostream>
-
-#include <armadillo>
-//#include <opencv2/opencv.hpp>
-//#include <opencv2/core.hpp>
-
-#include <QString>
-#include <QDir>
-#include <QFileDialog>
-#include <QFile>
-#include <QDebug>
-#include <QObject>
-
-#include <QJsonObject>
-#include <QJsonDocument>
-#include <QJsonParseError>
-#include <QJsonArray>
-#include <QDateTime>
-
-using namespace std;
-using namespace arma;
+#include "lib.h"
 
 class near_ps
 {

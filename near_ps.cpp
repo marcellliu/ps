@@ -238,9 +238,6 @@ void near_ps::init()
         sp_mat Ayy(npixels*nimgs,npixels*nimgs);
         Axx.diag() = reshape(fx*grad_Tz.slice(0)-px_rep%grad_Tz.slice(2),1,npixels*nimgs);
         Ayy.diag() = reshape(fy*grad_Tz.slice(1)-py_rep%grad_Tz.slice(2),1,npixels*nimgs);
-        time = QDateTime::currentDateTime();
-        timeT = time.toTime_t();
-        qDebug() << timeT;
         umat id(2,npixels*nimgs);
         id.row(0) = regspace<urowvec>(0,npixels*nimgs-1);
         id.row(1) = id.row(0)-(id.row(0)/npixels)*npixels;
@@ -254,9 +251,6 @@ void near_ps::init()
         mat rhs = repmat(chi,1,nchannels)%rho_rep%(rho_rep%repmat(psi,1,nchannels)+Iv)%w;
         rhs = A.t()*reshape(rhs,npixels*nimgs*nchannels,1)/(nimgs*npixels*nchannels);
         rho_rep.clear();
-        time = QDateTime::currentDateTime();
-        timeT = time.toTime_t();
-        qDebug() << timeT;
 
         mat precond_L,precond_R;
         /* Recompute the preconditioner every 5 iterations */

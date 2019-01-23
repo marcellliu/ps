@@ -25,15 +25,14 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 SOURCES += \
         main.cpp \
-        mainwindow.cpp \
-    near_ps.cpp
+    near_ps.cpp \
+    app.cpp
 
 HEADERS += \
-        mainwindow.h \
-    near_ps.h
-
-FORMS += \
-        mainwindow.ui
+    near_ps.h \
+    UI.h \
+    lib.h \
+    app.h
 
 #INCLUDEPATH += /usr/include/opencv \
 #               /user/include/opencv2
